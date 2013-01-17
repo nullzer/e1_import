@@ -1,0 +1,106 @@
+<?php
+function addHtmlParser(){
+    include_once('simple_html_dom.php');    
+}
+
+function ei_parse_page($url){
+    addHtmlParser();
+    $html = file_get_html($url);                                                                                                                                 
+    $hds = array('null1'=>'Количество смежных комнат:',                                                                                                                          
+            'field_rooms'=>'Кол-во комнат в квартире:',                                                                                                                                
+            'field_yardage'=>'Общая площадь, кв.м.',                                                                                                                                     
+            'field_price'=>'Цена:',                                                                                                                                                    
+            'Срок сдачи:',                                                                                                                                              
+            'Коммунальные платежи:',                                                                                                                                    
+            'Адрес:',                                                                                                                                                   
+            'Последнее изменение:',                                                                                                                                     
+            'Срок публикации, до:',                                                                                                                                     
+            'Этаж:',                                                                                                                                                    
+            'Сан узел:',                                                                                                                                                
+            'Мебель:',                                                                                                                                                  
+            'Телефон:',                                                                                                                                                 
+            'Лоджия:',                                                                                                                                                  
+            'Город:',                                                                                                                                                   
+            'Район:',                                                                                                                                                   
+            'Контактное лицо:',                                                                                                                                         
+            'Телефон:',                                                                                                                                                 
+            'Дополнительные сведения:'                                                                                                                                  
+        ); 
+    
+    foreach($html->find('body table tbody tr td table tbody tr td table tbody') as $tbody)
+        foreach($tbody->find('tr') as $tr){                                                                                                                             
+            $need = '';                                                                                                                                                 
+            foreach($tr->find('td') as $td){                                                                                                                            
+                $value = strip_tags(trim(str_replace('&nbsp;',' ',iconv('cp1251','utf-8',$td->plaintext))));                                                            
+                 if(in_array($value,$hds))                                                                                                                              
+                    $need = $value;                                                                                                                                     
+                elseif(!empty($need))                                                                                                                                   
+                    $rez[$need][] = $value;                                                                                                                             
+            }                                                                                                                                                           
+        }                                                                                                                                                               
+                                                                                                                                                                       
+    //zabiraem opisanie                                                                                                                                                 
+    foreach($html->find('body table tbody tr td table tbody') as $tbody){                                                                                               
+        $need = '';                                                                                                                                                     
+            foreach($tbody->find('tr') as $tr)                                                                                                                          
+                    foreach($tr->find('td') as $td){                                                                                                                    
+                            $value = strip_tags(trim(str_replace('&nbsp;',' ',iconv('cp1251','utf-8',$td->plaintext))));                                                
+                             if(in_array($value,$hds)&&empty($rez[$value]))                                                                                             
+                                    $need = $value;                                                                                                                     
+                            elseif(!empty($need))                                                                                                                       
+                                    $rez[$need][] = $value;                                                                                                             
+                    }                                                                                                                                                   
+    }
+    unset($html);
+    return $rez;
+}
+
+function e1_import_cron(){
+    addHtmlParser();
+    $pageCount = 10;
+    $colors = array('#dddddd','#FFF3D7');                                                                                                                                   
+    $rez = array();
+    for($i=0;$i<$pageCount;$i++){                                                                                                                                           
+        $html = file_get_html('http://www.e1.ru/business/realty/index.php?ot=4&bt=1&nb=0&p='.$i.'&sb=8&ob=2');
+        foreach($colors as $color)                                                                                                                                              
+            foreach($html->find('tr[bgcolor='.$color.']') as $tr)                                                                                                               
+                foreach($tr->find('td') as $td){                                                                                                                        
+                    $ids = array();                                                                                                                                             
+                    preg_match('/^([0-9]{7,8})*/',strip_tags(trim(str_replace('&nbsp;','',iconv('cp1251','utf-8',$td->children(0)->children(0)->href)))),$ids);
+                    $rez[] = $ids[0];                                                                                                                                           
+                    break;                                                                                                                                                      
+                }   
+        sleep(100);                                                                                                                                                           
+    }
+    $newList = array_diff($rez, array_keys(db_select('node', 'n')
+    ->fields('n',array('title'))
+    ->condition('type', 'buffer')
+    ->condition('title', $rez,'IN')
+    ->execute()
+    ->fetchAllAssoc('title')));    
+    foreach($newList as $new){
+        $node = new stdClass();
+        $node->type = 'buffer';
+        node_object_prepare($node);
+        $node->language = LANGUAGE_NONE;
+        $node->title = $new;
+        $node->field_original_link[$node->language][0]['value'] = 'http://www.e1.ru/business/realty/'.$new.'.html';
+        node_save($node);
+    }
+    if(!empty($newList))
+        watchdog('e1.GetList', 'Added'.count($newList));    
+    //RUN TO IMPORT NEW DATA
+    $query = db_select('node', 'n');
+    $query->leftjoin('field_data_field_parsed_content','p','n.nid = p.entity_id');
+    $query->isNull('p.field_parsed_content_value');
+    $query->fields('n',array('nid'))//SELECT the fields from node
+    ->orderBy('created', 'DESC')//ORDER BY created
+    ->range(0,50);//LIMIT to 2 records
+    $rz = array_keys($query->execute()->fetchAllAssoc('nid'));
+    foreach($rz as $r){
+        $buff = node_load($r);
+        $buff->field_parsed_content[$buff->language][0]['value'] = serialize(ei_parse_page($buff->field_original_link[$buff->language][0]['value']));
+        node_save($buff);
+        sleep(50);
+    }
+ }

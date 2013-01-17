@@ -1,0 +1,6 @@
+name = E1.import
+description = Import from e1
+php = 5.0
+core = 7.x
+package = Spider
+ 
